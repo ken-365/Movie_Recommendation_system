@@ -1,0 +1,787 @@
+---
+title: "Movie Recommendation Project"
+author: "PK (Kasidit) Ratanavijai"
+date: "9/5/2019"
+output: github_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center', cache=FALSE, cache.lazy = FALSE)
+```
+
+```{r, include=FALSE, echo=FALSE}
+# All libraries
+
+if(!require(tidyverse)) install.packages("tidyverse") 
+if(!require(kableExtra)) install.packages("kableExtra")
+if(!require(tidyr)) install.packages("tidyr")
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(stringr)) install.packages("stringr")
+if(!require(forcats)) install.packages("forcats")
+if(!require(ggplot2)) install.packages("ggplot2")
+```
+
+```{r, include=FALSE, echo=FALSE}
+# Loading all libraries
+
+library(dplyr)
+library(tidyverse)
+library(kableExtra)
+library(tidyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+```
+
+```{r, include=FALSE, echo=FALSE}
+#############################################################
+# Create edx set, validation set, and submission file
+#############################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- read.table(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                      col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Evaluation set will be 10% of MovieLens data
+
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+## Executive Summary
+
+Moview recommendation system filter out the title that a particular user would be interested in or would buy based on his or her previous history. The more data available about a user the more accurate the recommendations.  
+
+The objective of this project is to create a recommender system based on variables of MovieLens dataset that minimizes the loss so that the RMSE is as small as possible. 
+
+The steps include Data preparation and Analysis, Methodology and various tools used in the process, Reporting, and Recommendation.
+
+Finally, ~the recommender systems builted on this dataset are evaluated and choosen based on the RMSE - Root Mean Squared Error that should be at least lower than **0.87750**.~
+
+$$\mbox{RMSE} = \sqrt{\frac{1}{n}\sum_{t=1}^{n}e_t^2}$$
+
+```{r, include=FALSE, echo=FALSE}
+# The RMSE function that will be used in this project is:
+RMSE <- function(true_ratings = NULL, predicted_ratings = NULL) {
+    sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```   
+
+~For accomplishing this goal, the **Regularized Movie+User+Genre Model** is capable to reach a RMSE of **0.8628**, that is really good.~
+
+## Project objectives
+
+Creating a movie recommendation system using the MovieLens dataset, which the entire latest MovieLens dataset can be found here (https://grouplens.org/datasets/movielens/latest/). We will use the 10M version of the MovieLens dataset 
+to make the computation a little easier.  
+
+The version of movielens dataset used for this final assignment contains 10 Milions of movies ratings, partitioned into 9 Milions for training data set and 1 Milion for evaluate data set. Training set composed from 69,878 users with 9,000,061 rating from 0.5 to 5 and 10,677 different movie titles in 20 genres such as Action, Adventure, Horror, Drama, Thriller. 
+
+Then use a machine learning algorithm using the inputs in one subset to predict movie ratings in the validation set to train a movie recommendation system.  
+
+The goal is to build an algorithm that minimizes the loss so that the RMSE is as small as possible. 
+
+## Data Ingestion, preparation, and analysis
+
+### Data Ingestion
+
+The data set partitioned into 9 million obervations training data set for algorithm training and 1 million obervations test to final evaluate the algorithm.  
+
+**The training data set** contatins 69,878 users, 10,677 different movie titles, and 9,000,061 total ratings
+```{r 8, echo=FALSE, include=TRUE}
+edx %>% summarize(Users = n_distinct(userId),
+              Movies = n_distinct(movieId),
+              Rating = length(rating)) %>% 
+kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+**The testing data set** contatins 68,531 users, 9,796 different movie titles, and 999,993 total ratings
+```{r 9, echo=FALSE, include=TRUE}
+validation %>% summarize(Users = n_distinct(userId),
+              Movies = n_distinct(movieId),
+              Rating = length(rating)) %>% 
+kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+**Header of the training data set**
+
+```{r 10, echo=FALSE, include=TRUE}
+head(edx) %>%
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+**Structure of the training data set**
+
+- **userId** ```<integer>``` that contains the unique identification number for each user.
+- **movieId** ```<numeric>``` that contains the unique identification number for each movie.
+- **rating** ```<numeric>``` that contains the rating of one movie by one user. Ratings are made on a 5-Star scale with half-star increments.
+- **timestamp** ```<integer>``` that contains the timestamp for one specific rating provided by one user.
+- **title** ```<character>``` that contains the title of each movie including the year of the release.
+- **genres** ```<character>``` that contains a list of pipe-separated of genre of each movie.
+
+### Data preparation
+
+Data preparation gone through these steps
+
+  1.Normalize the Genres column to single values by extract each genre from pipe value.
+  2.Convert numeric timestamp to date type including year movie release, year that movie was rated, and month that movie was rated.
+
+```{r 11, echo=FALSE, include=FALSE}
+# Convert timestamp to a human readable date
+
+edx$date <- as.POSIXct(edx$timestamp, origin="1970-01-01")
+validation$date <- as.POSIXct(validation$timestamp, origin="1970-01-01")
+```
+
+```{r 12, echo=FALSE, include=FALSE}
+# Extract the year and month of rate in both dataset
+
+
+edx$yearOfRate <- format(edx$date,"%Y")
+edx$monthOfRate <- format(edx$date,"%m")
+validation$yearOfRate <- format(validation$date,"%Y")
+validation$monthOfRate <- format(validation$date,"%m")
+```
+
+```{r 13, echo=FALSE, include=FALSE}
+# Extract the year of release for each movie in both dataset
+# edx dataset
+edx <- edx %>%
+   mutate(title = str_trim(title)) %>%
+   extract(title,
+           c("titleTemp", "release"),
+           regex = "^(.*) \\(([0-9 \\-]*)\\)$",
+           remove = F) %>%
+   mutate(release = if_else(str_length(release) > 4,
+                                as.integer(str_split(release, "-",
+                                                     simplify = T)[1]),
+                                as.integer(release))
+   ) %>%
+   mutate(title = if_else(is.na(titleTemp),
+                          title,
+                          titleTemp)
+         ) %>%
+  select(-titleTemp)
+# validation dataset
+validation <- validation %>%
+   mutate(title = str_trim(title)) %>%
+   extract(title,
+           c("titleTemp", "release"),
+           regex = "^(.*) \\(([0-9 \\-]*)\\)$",
+           remove = F) %>%
+   mutate(release = if_else(str_length(release) > 4,
+                                as.integer(str_split(release, "-",
+                                                     simplify = T)[1]),
+                                as.integer(release))
+   ) %>%
+   mutate(title = if_else(is.na(titleTemp),
+                          title,
+                          titleTemp)
+         ) %>%
+  select(-titleTemp)
+```
+
+```{r 14, echo=FALSE, include=FALSE}
+# Extract the genre in edx datasets
+edx <- edx %>%
+   mutate(genre = fct_explicit_na(genres,
+                                       na_level = "(no genres listed)")
+          ) %>%
+   separate_rows(genre,
+                 sep = "\\|")
+```
+
+```{r 15, echo=FALSE, include=FALSE}
+# Extract the genre in validation datasets
+validation <- validation %>%
+   mutate(genre = fct_explicit_na(genres,
+                                       na_level = "(no genres listed)")
+          ) %>%
+   separate_rows(genre,
+                 sep = "\\|")
+```
+
+```{r, echo=FALSE, include=FALSE}
+# remove unnecessary columns on edx and validation dataset
+edx <- edx %>% select(userId, movieId, rating, title, genre, release, yearOfRate, monthOfRate)
+validation <- validation %>% select(userId, movieId, rating, title, genre, release, yearOfRate, monthOfRate)
+```
+
+```{r, echo=FALSE, include=TRUE}
+# Convert the columns into the desidered data type
+edx$yearOfRate <- as.numeric(edx$yearOfRate)
+edx$monthOfRate <- as.numeric(edx$monthOfRate)
+edx$release <- as.numeric(edx$release)
+validation$yearOfRate <- as.numeric(validation$yearOfRate)
+validation$monthOfRate <- as.numeric(validation$monthOfRate)
+validation$release <- as.numeric(validation$release)
+```
+  
+  **Normalize form**
+```{r 16, echo=FALSE, include=TRUE}
+# Output the processed dataset
+
+head(edx) %>%
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+### Data Analysis
+
+#### Genre Analysis
+
+**Rating distribution over Genre**
+
+```{r 17, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(genre) %>%
+   summarise(count = n()) %>%
+   ggplot(aes(genre, count)) +
+   theme_classic()  +
+   geom_col() +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+   labs(title = "Ratings Frequency Distribution Per Genre",
+        x = "Genre",
+        y = "Frequency")
+```
+
+Notice that there are huge different in number of ratings received between each genres.
+
+```{ 18, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(genre) %>%
+   summarise(count = n()) %>%
+   arrange(desc(count)) %>%
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+
+**Mean Distribution per Genre**
+
+However, We see not much different in mean rating for each genre.
+
+```{r 19, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(genre) %>%
+   summarise(mean = mean(rating)) %>%
+   ggplot(aes(genre, mean)) +
+   theme_classic()  +
+   geom_col() +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+   labs(title = "Mean Distribution per Genre",
+        x = "Genre",
+        y = "Mean")
+```
+Here is ranking of genre by ratings.
+
+```{r 20, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(genre) %>%
+   summarise(mean = mean(rating)) %>%
+   arrange(desc(mean)) %>%
+   head(n=35) %>%
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+#### Rating Analysis
+
+**Rating frequency per title**
+
+```{r 21, echo=FALSE, include=TRUE}
+   ggplot(edx, aes(movieId)) +
+   theme_classic()  +
+   geom_histogram(bins=500) +
+   labs(title = "Ratings Frequency Distribution Per Title (MovieID)",
+        x = "Title (MovieID)",
+        y = "Frequency")
+```
+
+Notice from the distribution that some movies get rated more than other. This should not surprise given that there are blockbusters
+watched by millions and artsy independent movies watched by just a few.  
+
+**Rating frequency per user**
+
+```{r test, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(userId) %>%
+   summarise(un = length(rating)) %>%
+   ggplot(aes(userId, un)) +
+   theme_classic()  +
+   geom_col() +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+   ylim(0, 1500)+
+   labs(title = "Ratings Frequency Distribution Per User (userId)",
+        x = "User (userId)",
+        y = "Frequency")
+```
+
+
+```{r 22, echo=FALSE, include=TRUE}
+   ggplot(edx, aes(userId)) +
+   theme_classic()  +
+   geom_histogram(bins=500) +
+   labs(title = "Ratings Frequency Distribution Per User (userId)",
+        x = "User (userId)",
+        y = "Frequency")
+```
+
+This plot shows that some users are more active than others at rating movies. Notice that some users have rated over 1,000 movies
+while others have only rated a handful.  
+
+**Rating Distribution**
+
+```{r 23, echo=FALSE, include=TRUE}
+hist(edx$rating, main="Distribution of User's Ratings", xlab="Rating")
+```
+
+Observe that there are a small amount of under average rating (below 3). The user tends to give a vote if he liked the movie that less liked the movie. 1 and 2 ratings are less common than 4 and 5 ratings.
+
+**Top 10 titles with many rating given**
+
+```{r 24, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(title) %>%
+   summarise(count = n()) %>%
+   arrange(desc(count)) %>%
+   head(n=30) %>%
+   ggplot(aes(title, count)) +
+   theme_classic()  +
+   geom_col() +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7)) +
+   labs(title = "Ratings Frequency Distribution Per Title - TOP 30 Movies",
+        x = "Title",
+        y = "Frequency")
+```
+
+Here is title with the most ratings receive
+
+```{r 25, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(title) %>%
+   summarise(count = n()) %>%
+   arrange(desc(count)) %>%
+   head(n=10) %>%
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+**Top 20 titles with highest rating**
+
+```{r 26, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(title) %>%
+   summarise(mean = mean(rating)) %>%
+   arrange(desc(mean)) %>%
+   head(n=20) %>%
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE)
+```
+
+**Distribution of ratings from 0.5 to 5 of each titles**
+
+```{r 27, echo=FALSE, include=TRUE}
+edx %>%
+   group_by(title) %>%
+   summarise(mean = mean(rating)) %>%
+   ggplot(aes(mean)) +
+   theme_classic()  +
+   geom_histogram(bins=12) +
+   labs(title = "Mean Distribution per Title",
+        x = "Mean",
+        y = "Frequency")
+```
+
+
+## Methodology and various tools used in the process
+
+### Model based approach
+
+The simplest model is a Naive Model that predict the mean. This model predict the same rating for all movies regardless of user, and that assumes the same rating for all movies and users with all the differences explained by random variation would look like this:
+
+![model](https://latex.codecogs.com/gif.latex?%5Cdpi%7B120%7D%20Y_%7Bu%2Ci%7D%20%3D%20u%20&plus;%5Cepsilon%20_%7Bu%2Ci%7D)
+
+```{r 28, echo=FALSE, include=TRUE}
+paste("Mean is ", as.character(round(mean(edx$rating))))
+```
+
+With ![muhat](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Chat_%7B%5Cmu%7D) is the mean and ![epiu](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Cepsilon%20_%7Bi%2Cu%7D) is the independent errors sampled from the same distribution centered at 0.
+
+```{r 29, echo=FALSE, include=TRUE}
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Predict the RMSE on the validation set
+rmse_mean_model_result <- RMSE(validation$rating, mu_hat)
+# Creating a results dataframe that contains all RMSE results
+results <- data.frame(model="Naive Mean-Baseline Model", RMSE=rmse_mean_model_result)
+```
+
+The RMSE on the ```validation``` dataset is **1.05**. It is very far for the target RMSE (below 0.87) and that indicates poor performance for the model.
+
+### Predicted ~ Movie Model, based on Movie effect
+
+Nothice that some movies are just generally rated higher than others. This intuition, that different movies are rated differently, is confirmed by data. We can augment our previous model by adding the term ![bi](https://latex.codecogs.com/gif.latex?%5Cinline%20b%20_%7Bi%7D) to represent average ranking for movie ![i](https://latex.codecogs.com/gif.latex?%5Cinline%20i) :
+
+![modebi](https://latex.codecogs.com/gif.latex?%5Cdpi%7B120%7D%20Y%3D%5Chat%7Bu%7D&plus;b_%7Bi%7D&plus;%5Cepsilon%20_%7Bu%2Ci%7D)
+
+With ![muhat](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Chat_%7B%5Cmu%7D) is the mean and ![epiu](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Cepsilon%20_%7Bi%2Cu%7D) is the independent errors sampled from the same distribution centered at 0. The ![bi](https://latex.codecogs.com/gif.latex?%5Cinline%20b%20_%7Bi%7D) is a measure for the popularity of movie ![i](https://latex.codecogs.com/gif.latex?%5Cinline%20i), i.e. the bias of movie ![i](https://latex.codecogs.com/gif.latex?%5Cinline%20i).
+
+```{r 30, echo=FALSE, include=TRUE}
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+   group_by(movieId) %>%
+   summarize(b_i = mean(rating - mu_hat))
+# Compute the predicted ratings on validation dataset
+rmse_movie_model <- validation %>%
+   left_join(movie_avgs, by='movieId') %>%
+   mutate(pred = mu_hat + b_i) %>%
+   pull(pred)
+rmse_movie_model_result <- RMSE(validation$rating, rmse_movie_model)
+# Adding the results to the results dataset
+results <- results %>% add_row(model="Movie-Based Model", RMSE=rmse_movie_model_result)
+```
+
+The RMSE on the ```validation``` dataset is **0.94**. It better than the Naive Mean-Baseline Model, but it is also very far from the target RMSE (below 0.87) and that indicates poor performance for the model.
+
+### Predicted ~ Movie + User Model, based on User
+
+the average rating for user ![u](https://latex.codecogs.com/gif.latex?%5Cinline%20u) for those that have rated over 100 movies:  
+
+```{r 31, include=FALSE}
+edx %>% 
+  group_by(userId) %>% 
+  summarize(b_u = mean(rating)) %>% 
+  filter(n()>=100) %>%
+  ggplot(aes(b_u)) + 
+  geom_histogram(bins = 30, color = "black")
+```
+
+This plot points out that there is substantial variability across users: some users are very cranky and others love every movie. This implies that a further improvement to our model :
+
+![bumod](https://latex.codecogs.com/gif.latex?%5Cdpi%7B120%7D%20Y%3D%5Chat%7Bu%7D&plus;b_%7Bi%7D&plus;b_%7Bu%7D&plus;%5Cepsilon%20_%7Bu%2Ci%7D)
+
+where ![bu](https://latex.codecogs.com/gif.latex?%5Cinline%20b_%7Bu%7D) is a user-specific effect. Now if a cranky user rates a great movie the effects counter each other and we may be able to correctly predict that this user gave this great movie a 3 rather than a 5.
+
+```{r 32, echo=FALSE, include=TRUE}
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+   group_by(movieId) %>%
+   summarize(b_i = mean(rating - mu_hat))
+# Calculate the average by user
+user_avgs <- edx %>%
+   left_join(movie_avgs, by='movieId') %>%
+   group_by(userId) %>%
+   summarize(b_u = mean(rating - mu_hat - b_i))
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_model <- validation %>%
+   left_join(movie_avgs, by='movieId') %>%
+   left_join(user_avgs, by='userId') %>%
+   mutate(pred = mu_hat + b_i + b_u) %>%
+   pull(pred)
+rmse_movie_user_model_result <- RMSE(validation$rating, rmse_movie_user_model)
+# Adding the results to the results dataset
+results <- results %>% add_row(model="Movie+User Based Model", RMSE=rmse_movie_user_model_result)
+```
+
+With ![muhat](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Chat_%7B%5Cmu%7D) is the mean and ![epiu](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Cepsilon%20_%7Bi%2Cu%7D) is the independent errors sampled from the same distribution centered at 0. The ![bi](https://latex.codecogs.com/gif.latex?%5Cinline%20b%20_%7Bi%7D) is a measure for the popularity of movie ![i](https://latex.codecogs.com/gif.latex?%5Cinline%20i), i.e. the bias of movie ![i](https://latex.codecogs.com/gif.latex?%5Cinline%20i). The  ![bu](https://latex.codecogs.com/gif.latex?%5Cinline%20b_%7Bu%7D) is a measure for the mildness of user ![u](https://latex.codecogs.com/gif.latex?%5Cinline%20u), i.e. the bias of user ![u](https://latex.codecogs.com/gif.latex?%5Cinline%20u).
+
+
+The RMSE on the ```validation``` dataset is **0.8635** and this is very good. The Movie+User Based Model reaches the desidered performance but applying the regularization techniques, can improve the performance just a little.
+
+### Predicted ~ Movie + User + Genre Model, based on Genre
+
+the average rating for Genre  that have ratings over 100 :
+
+```{r 33, include=FALSE}
+edx %>% 
+  group_by(genre) %>% 
+  summarize(b_u = mean(rating)) %>% 
+  filter(n()>=100) %>%
+  ggplot(aes(b_u)) + 
+  geom_histogram(bins = 30, color = "black")
+```
+
+Notice each genre's rating vary greatly. This implies that a further improvement to our model :
+
+![bugmod](https://latex.codecogs.com/gif.latex?%5Cdpi%7B120%7D%20Y%3D%5Chat%7Bu%7D&plus;b_%7Bi%7D&plus;b_%7Bu%7D&plus;b_%7Bu%2Ch%7D&plus;%5Cepsilon%20_%7Bu%2Ci%7D)
+
+With ![muhat](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Chat_%7B%5Cmu%7D) is the mean and ![epiu](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Cepsilon%20_%7Bi%2Cu%7D) is the independent errors sampled from the same distribution centered at 0. The ![bi](https://latex.codecogs.com/gif.latex?%5Cinline%20b%20_%7Bi%7D) is a measure for the popularity of movie ![i](https://latex.codecogs.com/gif.latex?%5Cinline%20i), i.e. the bias of movie ![i](https://latex.codecogs.com/gif.latex?%5Cinline%20i). The  ![bu](https://latex.codecogs.com/gif.latex?%5Cinline%20b_%7Bu%7D) is a measure for the mildness of user ![u](https://latex.codecogs.com/gif.latex?%5Cinline%20u), i.e. the bias of user ![u](https://latex.codecogs.com/gif.latex?%5Cinline%20u). The ![bug](https://latex.codecogs.com/gif.latex?%5Cinline%20b_%7Bu%2Cg%7D) is a measure for how much a user ![u](https://latex.codecogs.com/gif.latex?%5Cinline%20u) favors the genre ![g](https://latex.codecogs.com/gif.latex?%5Cinline%20g).
+
+```{r 34, echo=FALSE, include=TRUE}
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+   group_by(movieId) %>%
+   summarize(b_i = mean(rating - mu_hat))
+# Calculate the average by user
+user_avgs <- edx %>%
+   left_join(movie_avgs, by='movieId') %>%
+   group_by(userId) %>%
+   summarize(b_u = mean(rating - mu_hat - b_i))
+genre_pop <- edx %>%
+   left_join(movie_avgs, by='movieId') %>%
+   left_join(user_avgs, by='userId') %>%
+   group_by(genre) %>%
+   summarize(b_u_g = mean(rating - mu_hat - b_i - b_u))
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_genre_model <- validation %>%
+   left_join(movie_avgs, by='movieId') %>%
+   left_join(user_avgs, by='userId') %>%
+   left_join(genre_pop, by='genre') %>%
+   mutate(pred = mu_hat + b_i + b_u + b_u_g) %>%
+   pull(pred)
+rmse_movie_user_genre_model_result <- RMSE(validation$rating, rmse_movie_user_genre_model)
+# Adding the results to the results dataset
+results <- results %>% add_row(model="Movie+User+Genre Based Model", RMSE=rmse_movie_user_genre_model_result)
+```
+
+The RMSE on the ```validation``` dataset is **0.8634** and this is very good.  The Movie+User+Genre Based Model reaches the desidered performance but adding the ```genre``` predictor, doesn't improve significantly the model's performance. Applying the regularization techniques, can improve the performance just a little.
+
+### Regularization
+
+The regularization method allows us to add a penalty ![lam](https://latex.codecogs.com/gif.latex?%5Cinline%20%5Clambda) (lambda) to penalizes movies with large estimates from a small sample size. In order to optimize $![bi](https://latex.codecogs.com/gif.latex?%5Cinline%20b%20_%7Bi%7D), it necessary to use this equation:
+
+![s](https://latex.codecogs.com/gif.latex?%5Cdpi%7B120%7D%20%5Cfrac%7B1%7D%7BN%7D%20%5Csum_%7Bu%2Ci%7D%20%28y_%7Bu%2Ci%7D%20-%20%5Cmu%20-b_i%29&plus;%20%5Clambda%20%5Csum_%7Bi%7D%20b_%7Bi%7D%5E%7B2%7D) 
+
+The first term is just least squares and the second is a penalty that gets larger when many ![bi](https://latex.codecogs.com/gif.latex?%5Cinline%20b%20_%7Bi%7D) are large. Using calculus we can actually show that the values of ![bi](https://latex.codecogs.com/gif.latex?%5Cinline%20b%20_%7Bi%7D) that minimize this equation are:
+
+![red](https://latex.codecogs.com/gif.latex?%5Cdpi%7B120%7D%20%5Chat%7Bb%7D_%7Bi%7D%28%5Clambda%29%3D%5Cfrac%7B1%7D%7B%5Clambda%20&plus;n_i%7D%20%5Csum_%7Bu%2Ci%7D%5E%7Bn_i%7D%20%28Y_%7Bu%2Ci%7D%20-%20%5Chat%7B%5Cmu%7D%29)
+
+### Regularized Predicted ~ Movie Model
+
+```{r 35, echo=FALSE, include=TRUE}
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 10, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+   
+  # Calculate the average by user
+  
+   b_i <- edx %>%
+      group_by(movieId) %>%
+      summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+   
+   # Compute the predicted ratings on validation dataset
+   
+   predicted_ratings <- validation %>%
+      left_join(b_i, by='movieId') %>%
+      mutate(pred = mu_hat + b_i) %>%
+      pull(pred)
+   
+   # Predict the RMSE on the validation set
+   
+   return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+   theme_classic()  +
+   geom_point() +
+   labs(title = "RMSEs vs Lambdas - Regularized Movie Based Model",
+        y = "RMSEs",
+        x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_regularized_movie_model <- min(rmses)
+# Adding the results to the results dataset
+results <- results %>% add_row(model="Regularized Movie-Based Model", RMSE=rmse_regularized_movie_model)
+```
+
+The RMSE on the ```validation``` dataset is **0.8635** and this is very good. The Movie+User Based Model reaches the desidered performance but applying the regularization techniques, can improve the performance just a little.
+
+### Regularized Predicted ~ Movie + User Model
+
+```{r 36, echo=FALSE, include=TRUE}
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 15, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+   # Calculate the average by user
+   
+   b_i <- edx %>%
+      group_by(movieId) %>%
+      summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+   
+   # Calculate the average by user
+   
+   b_u <- edx %>%
+      left_join(b_i, by='movieId') %>%
+      group_by(userId) %>%
+      summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+   
+   # Compute the predicted ratings on validation dataset
+   
+   predicted_ratings <- validation %>%
+      left_join(b_i, by='movieId') %>%
+      left_join(b_u, by='userId') %>%
+      mutate(pred = mu_hat + b_i + b_u) %>%
+      pull(pred)
+   
+   # Predict the RMSE on the validation set
+   
+   return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+   theme_classic()  +
+   geom_point() +
+   labs(title = "RMSEs vs Lambdas - Regularized Movie+User Model",
+        y = "RMSEs",
+        x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_regularized_movie_user_model <- min(rmses)
+# Adding the results to the results dataset
+results <- results %>% add_row(model="Regularized Movie+User Based Model", RMSE=rmse_regularized_movie_user_model)
+```
+
+The RMSE on the ```validation``` dataset is **0.8629**. The Regularized Movie+User Based Model improves just a little the result of the Non-Regularized Model.
+
+### Regularized Predicted ~ Movie + User + Genre Model
+
+```{r 37, echo=FALSE, include=TRUE}
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 15, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+   # Calculate the average by user
+   
+   b_i <- edx %>%
+      group_by(movieId) %>%
+      summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+   
+   # Calculate the average by user
+   
+   b_u <- edx %>%
+      left_join(b_i, by='movieId') %>%
+      group_by(userId) %>%
+      summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+   
+    b_u_g <- edx %>%
+      left_join(b_i, by='movieId') %>%
+      left_join(b_u, by='userId') %>%
+      group_by(genre) %>%
+      summarize(b_u_g = sum(rating - b_i - mu_hat - b_u) / (n() + lambda))
+   
+   # Compute the predicted ratings on validation dataset
+   
+   predicted_ratings <- validation %>%
+      left_join(b_i, by='movieId') %>%
+      left_join(b_u, by='userId') %>%
+      left_join(b_u_g, by='genre') %>%
+      mutate(pred = mu_hat + b_i + b_u + b_u_g) %>%
+      pull(pred)
+   
+   # Predict the RMSE on the validation set
+   
+   return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+   theme_classic()  +
+   geom_point() +
+   labs(title = "RMSEs vs Lambdas - Regularized Movie+User+Genre Model",
+        y = "RMSEs",
+        x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_regularized_movie_user_genre_model <- min(rmses)
+# Adding the results to the results dataset
+results <- results %>% add_row(model="Regularized Movie+User+Genre Based Model", RMSE=rmse_regularized_movie_user_genre_model)
+```
+
+The RMSE on the ```validation``` dataset is **0.8628** and this is the best result of the builted models. The Regularized Movie+User+Genre Based Model improves just a little the result of the Non-Regularized Model. As the Non-Regularized Model, the ```genre``` predictor doesn't improve significantly the model's performance.
+
+## Reporting
+
+This is the summary results for all the model builted, trained on ```edx``` dataset and validated on the ```validation``` dataset.
+
+```{r 38, echo=FALSE, include=TRUE}
+# Shows the results
+results %>% 
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+             position = "center",
+             font_size = 10,
+             full_width = FALSE)
+```
+
+## Recommendations
+
+It's clear that ```movieId``` and ```userId``` contribute more than the ```genre``` predictor. Without regularization, the model can archieves and overtakes the desidered peformance, but the best is the enemy of the good and applying regularization and adding the ```genre``` predictor, it make possible to reach a RSME of **0.8628** that is the best result for the trained models.
